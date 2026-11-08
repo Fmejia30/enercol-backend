@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model AuthSession {
+  id                     String    @id @default(uuid())
+  sessionIdHash          String    @unique @map("session_id_hash")
+  userId                 String    @map("user_id")
+  email                  String?
+  encryptedAccessToken   String    @map("encrypted_access_token")
+  encryptedRefreshToken  String    @map("encrypted_refresh_token")
+  encryptedCsrfToken     String    @map("encrypted_csrf_token")
+  accessTokenExpiresAt   DateTime  @map("access_token_expires_at")
+  expiresAt              DateTime  @map("expires_at")
+  lastActivityAt         DateTime  @map("last_activity_at")
+  revokedAt              DateTime? @map("revoked_at")
+  csrfTokenHash          String    @map("csrf_token_hash")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  @@index([expiresAt])
+  @@map("auth_session")
+}
+
+model AuthChallenge {
+  id               String    @id @default(uuid())
+  challengeIdHash  String    @unique @map("challenge_id_hash")
+  userId           String?   @map("user_id")
+  challengeName    String    @map("challenge_name")
+  encryptedSession String    @map("encrypted_session")
+  expiresAt        DateTime  @map("expires_at")
+  consumedAt       DateTime? @map("consumed_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("auth_challenge")
+}
