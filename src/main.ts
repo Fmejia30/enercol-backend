@@ -1,3 +1,4 @@
+
 import 'reflect-metadata';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -8,12 +9,14 @@ import { configureApp } from './shared/http/configure-app.js';
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
+
   configureApp(app, {
     frontendOrigin: configService.getOrThrow<string>('frontendOrigin'),
     nodeEnv: configService.getOrThrow<string>('nodeEnv'),
   });
 
   const nodeEnv = configService.getOrThrow<string>('nodeEnv');
+
   if (nodeEnv !== 'production') {
     const document = SwaggerModule.createDocument(
       app,
@@ -31,19 +34,11 @@ async function bootstrap(): Promise<void> {
         })
         .build(),
     );
+
     SwaggerModule.setup('api/swagger', app, document);
   }
 
-  app.enableCors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
-    exposedHeaders: ['Content-Disposition'],
-  });
-
-  const port = process.env.PORT ?? 3000;
-  app.enableCors();
-  await app.listen(port);
+  await app.listen(configService.getOrThrow<number>('port'));
 }
 
-await bootstrap();
+bootstrap();
