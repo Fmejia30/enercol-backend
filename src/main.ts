@@ -41,7 +41,9 @@ async function bootstrap(): Promise<void> {
     exposedHeaders: ['Content-Disposition'],
   });
 
-  await app.listen(configService.getOrThrow<number>('port'));
+  const port = process.env.PORT ?? 3000;
+  app.enableCors();
+  await app.listen(port);
 }
 
 await bootstrap();
