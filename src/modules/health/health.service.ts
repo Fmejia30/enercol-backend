@@ -1,10 +1,10 @@
+
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service.js';
-import type { HealthChecksDto } from './dto/health-response.dto.js';
-
-export interface HealthReport {
-  checks: HealthChecksDto;
-}
+import {
+  HealthChecksDto,
+  HealthResponseDto,
+} from './dto/health-response.dto.js';
 
 @Injectable()
 export class HealthService {
@@ -12,15 +12,42 @@ export class HealthService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async check(): Promise<HealthReport> {
+  checkLiveness(): HealthResponseDto {
+    return {
+      status: 'ok',
+      service: 'enercol-backend',
+      timestamp: new Date().toISOString(),
+      checks: {},
+    };
+  }
+
+  async checkReadiness(): Promise<HealthResponseDto> {
+    let checks: HealthChecksDto;
+
     try {
       await this.prisma.$queryRaw`SELECT 1`;
-      return { checks: { database: 'up' } };
+
+      checks = {
+        database: 'up',
+      };
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Unknown database error';
-      this.logger.error(`Database health check failed: ${message}`);
-      return { checks: { database: 'down' } };
+      this.logger.error(
+        'Database readiness check failed',
+        error instanceof Error ? error.stack : undefined,
+      );
+
+      checks = {
+        database: 'down',
+      };
     }
+
+    const databaseUp = checks.database === 'up';
+
+    return {
+      status: databaseUp ? 'ok' : 'error',
+      service: 'enercol-backend',
+      timestamp: new Date().toISOString(),
+      checks,
+    };
   }
 }
