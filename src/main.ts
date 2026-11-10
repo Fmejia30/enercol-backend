@@ -34,6 +34,13 @@ async function bootstrap(): Promise<void> {
     SwaggerModule.setup('api/swagger', app, document);
   }
 
+  app.enableCors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+    exposedHeaders: ['Content-Disposition'],
+  });
+
   await app.listen(configService.getOrThrow<number>('port'));
 }
 
