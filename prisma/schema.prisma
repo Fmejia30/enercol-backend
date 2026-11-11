@@ -40,3 +40,52 @@ model AuthChallenge {
   @@index([expiresAt])
   @@map("auth_challenge")
 }
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+
+  @@map("invitation_status")
+}
+
+model UserProfile {
+  id          String   @id @default(uuid())
+  cognitoSub  String   @unique @map("cognito_sub")
+  firstName   String   @map("first_name")
+  lastName    String   @map("last_name")
+  phoneNumber String   @map("phone_number")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("user_profile")
+}
+
+model UserInvitation {
+  id          String           @id @default(uuid())
+  email       String
+  cognitoSub  String?          @map("cognito_sub")
+  status      InvitationStatus @default(PENDING)
+  expiresAt   DateTime         @map("expires_at")
+  acceptedAt  DateTime?        @map("accepted_at")
+  createdBy   String           @map("created_by")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+
+  @@index([email])
+  @@index([cognitoSub])
+  @@map("user_invitation")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  actorSub  String   @map("actor_sub")
+  action    String
+  targetSub String?  @map("target_sub")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([targetSub, createdAt])
+  @@map("audit_log")
+}

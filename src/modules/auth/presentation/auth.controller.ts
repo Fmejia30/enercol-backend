@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
@@ -25,7 +26,10 @@ import { Public } from '../../identity-access/presentation/public.decorator.js';
 import {
   AuthUnavailableError,
   BffAuthService,
+  ChallengeExpiredError,
   CsrfRejectedError,
+  InvalidChallengeRequestError,
+  InvalidPasswordError,
   LoginRejected,
   RateLimitedError,
   type ClientContext,
@@ -50,6 +54,11 @@ const CSRF_REJECTED_MESSAGE = 'No fue posible validar la solicitud';
 const RATE_LIMIT_MESSAGE = 'Demasiados intentos. Inténtelo más tarde.';
 const UNAVAILABLE_MESSAGE =
   'No fue posible completar la autenticación. Inténtelo más tarde.';
+const PASSWORD_POLICY_MESSAGE =
+  'La contraseña no cumple la política de seguridad';
+const CHALLENGE_REQUEST_MESSAGE = 'La solicitud de activación no es válida';
+const CHALLENGE_EXPIRED_MESSAGE =
+  'El proceso de activación expiró. Inicie sesión de nuevo.';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -226,6 +235,15 @@ export class AuthController {
     }
     if (error instanceof AuthUnavailableError) {
       return new ServiceUnavailableException(UNAVAILABLE_MESSAGE);
+    }
+    if (error instanceof InvalidPasswordError) {
+      return new BadRequestException(PASSWORD_POLICY_MESSAGE);
+    }
+    if (error instanceof InvalidChallengeRequestError) {
+      return new BadRequestException(CHALLENGE_REQUEST_MESSAGE);
+    }
+    if (error instanceof ChallengeExpiredError) {
+      return new UnauthorizedException(CHALLENGE_EXPIRED_MESSAGE);
     }
     if (error instanceof LoginRejected) {
       return new UnauthorizedException(LOGIN_FAILED_MESSAGE);

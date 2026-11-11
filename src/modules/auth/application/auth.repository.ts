@@ -32,6 +32,11 @@ export interface StoredAuthSession extends NewAuthSession {
   createdAt: Date;
 }
 
+export interface ChallengePatch {
+  encryptedSession?: string;
+  consumedAt?: Date;
+}
+
 export interface SessionPatch {
   encryptedAccessToken?: string;
   encryptedRefreshToken?: string;
@@ -47,6 +52,13 @@ export interface AuthRepository {
     challengeIdHash: string,
     now: Date,
   ): Promise<StoredAuthChallenge | null>;
+  withChallengeLock<T>(
+    challengeIdHash: string,
+    work: (
+      challenge: StoredAuthChallenge | null,
+      patch: (patch: ChallengePatch) => Promise<void>,
+    ) => Promise<T>,
+  ): Promise<T>;
   saveSession(session: NewAuthSession): Promise<void>;
   revokeSession(sessionIdHash: string, revokedAt: Date): Promise<void>;
   withSessionLock<T>(

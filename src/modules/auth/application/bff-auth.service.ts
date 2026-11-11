@@ -16,6 +16,7 @@ import {
   ATTEMPT_LIMIT,
   ATTEMPT_WINDOW_MS,
   AUTH_CHALLENGE_TTL_MS,
+  MAX_CHALLENGE_PASSWORD_ATTEMPTS,
   randomToken,
   safeEqual,
   SESSION_ACTIVITY_TOUCH_MS,
@@ -31,6 +32,8 @@ import {
   AUTH_REPOSITORY,
   type AuthClock,
   type AuthRepository,
+  type ChallengePatch,
+  type StoredAuthChallenge,
   type StoredAuthSession,
 } from './auth.repository.js';
 import {
@@ -66,6 +69,27 @@ export class AuthUnavailableError extends Error {
   constructor() {
     super('Authentication provider unavailable');
     this.name = 'AuthUnavailableError';
+  }
+}
+
+export class InvalidPasswordError extends Error {
+  constructor() {
+    super('Password does not meet policy');
+    this.name = 'InvalidPasswordError';
+  }
+}
+
+export class InvalidChallengeRequestError extends Error {
+  constructor() {
+    super('Challenge request is invalid');
+    this.name = 'InvalidChallengeRequestError';
+  }
+}
+
+export class ChallengeExpiredError extends Error {
+  constructor() {
+    super('Challenge expired');
+    this.name = 'ChallengeExpiredError';
   }
 }
 
@@ -172,30 +196,11 @@ export class BffAuthService {
       `challenge:ip:${input.client.ip ?? 'unknown'}`,
       input.client,
     );
-    const now = this.clock();
-    const stored = await this.repository.consumeChallenge(
+    const decision = await this.repository.withChallengeLock(
       sha256Hex(input.challengeId),
-      now,
+      async (stored, patch) => this.decideChallenge(stored, patch, input),
     );
-    if (!stored || !isSupportedChallenge(stored.challengeName)) {
-      this.failChallenge(input.client, 'state');
-    }
-    const envelope = this.readEnvelope(stored.encryptedSession);
-    if (!envelope) {
-      this.failChallenge(input.client, 'state');
-    }
-
-    const outcome = await this.answerChallenge(
-      stored.challengeName,
-      envelope,
-      input,
-    );
-    return this.continueAuthentication(
-      outcome,
-      input.previousSessionId,
-      input.client,
-      true,
-    );
+    return this.settleChallenge(decision, input);
   }
 
   async logout(input: {
@@ -273,7 +278,8 @@ export class BffAuthService {
   }
 
   async authenticate(sessionId: string): Promise<AuthenticatedUser> {
-    return (await this.loadActive(sessionId)).user;
+    const active = await this.loadActive(sessionId);
+    return { ...active.user, email: active.email };
   }
 
   private async answerChallenge(
@@ -306,24 +312,8 @@ export class BffAuthService {
     }
 
     if (name === 'NEW_PASSWORD_REQUIRED') {
-      if (!input.newPassword) {
-        this.failChallenge(input.client, 'response');
-      }
-      const attributes = this.requiredAttributes(
-        envelope.requiredAttributes,
-        input.attributes,
-      );
-      if (!attributes) {
-        this.failChallenge(input.client, 'response');
-      }
-      return this.identity.respondToChallenge({
-        challengeName: name,
-        session: envelope.session,
-        username: envelope.username,
-        responses: { NEW_PASSWORD: input.newPassword, ...attributes },
-      });
+      this.failChallenge(input.client, 'response');
     }
-
     if (!input.code) {
       this.failChallenge(input.client, 'response');
     }
@@ -367,6 +357,16 @@ export class BffAuthService {
     }
     if (outcome.kind === 'challenge') {
       return this.storeChallenge(outcome.challenge, client);
+    }
+    if (outcome.kind !== 'tokens') {
+      this.audit(
+        fromChallenge ? 'AUTH_CHALLENGE_FAILED' : 'LOGIN_FAILED',
+        'failure',
+        client,
+        undefined,
+        'rejected',
+      );
+      throw new LoginRejected('rejected');
     }
 
     const session = await this.openSession(
@@ -622,23 +622,204 @@ export class BffAuthService {
     return 'active';
   }
 
-  private requiredAttributes(
-    required: string[],
-    provided: Record<string, string> | undefined,
-  ): Record<string, string> | null {
-    const attributes: Record<string, string> = {};
-    for (const name of required) {
-      const value = provided?.[name];
-      if (
-        typeof value !== 'string' ||
-        value.trim().length === 0 ||
-        value.length > 2048
-      ) {
-        return null;
-      }
-      attributes[name] = value.trim();
+  private async decideChallenge(
+    stored: StoredAuthChallenge | null,
+    patch: (patch: ChallengePatch) => Promise<void>,
+    input: {
+      code?: string;
+      newPassword?: string;
+      attributes?: Record<string, string>;
+      previousSessionId?: string;
+      client: ClientContext;
+    },
+  ): Promise<ChallengeDecision> {
+    const now = this.clock();
+    if (
+      !stored ||
+      stored.consumedAt ||
+      stored.expiresAt <= now ||
+      !isSupportedChallenge(stored.challengeName)
+    ) {
+      return { kind: 'expired' };
     }
-    return attributes;
+    const envelope = this.readEnvelope(stored.encryptedSession);
+    if (!envelope) {
+      await patch({ consumedAt: now });
+      return { kind: 'expired' };
+    }
+    if (stored.challengeName !== 'NEW_PASSWORD_REQUIRED') {
+      await patch({ consumedAt: now });
+      try {
+        return {
+          kind: 'continue',
+          outcome: await this.answerChallenge(
+            stored.challengeName,
+            envelope,
+            input,
+          ),
+        };
+      } catch (error) {
+        if (error instanceof LoginRejected) {
+          return { kind: 'rejected' };
+        }
+        throw error;
+      }
+    }
+    return this.decideNewPassword(envelope, patch, input, now);
+  }
+
+  private async decideNewPassword(
+    envelope: ChallengeEnvelope,
+    patch: (patch: ChallengePatch) => Promise<void>,
+    input: {
+      newPassword?: string;
+      attributes?: Record<string, string>;
+      client: ClientContext;
+    },
+    now: Date,
+  ): Promise<ChallengeDecision> {
+    const attempts = envelope.attempts ?? 0;
+    if (attempts >= MAX_CHALLENGE_PASSWORD_ATTEMPTS) {
+      await patch({ consumedAt: now });
+      return { kind: 'expired' };
+    }
+    if (!input.newPassword) {
+      return { kind: 'invalid_parameter' };
+    }
+    const responses = newPasswordResponses(
+      envelope.requiredAttributes,
+      input.newPassword,
+      input.attributes,
+    );
+    if (!responses) {
+      return this.keepPasswordAttempt(envelope, patch, attempts, now, {
+        kind: 'invalid_parameter',
+      });
+    }
+    const outcome = await this.identity.respondToChallenge({
+      challengeName: 'NEW_PASSWORD_REQUIRED',
+      session: envelope.session,
+      username: envelope.username,
+      responses,
+    });
+    if (
+      outcome.kind === 'invalid_password' ||
+      outcome.kind === 'invalid_parameter'
+    ) {
+      return this.keepPasswordAttempt(envelope, patch, attempts, now, {
+        kind: outcome.kind,
+      });
+    }
+    if (
+      outcome.kind === 'unavailable' ||
+      outcome.kind === 'throttled'
+    ) {
+      return { kind: outcome.kind };
+    }
+    await patch({ consumedAt: now });
+    if (outcome.kind === 'tokens' || outcome.kind === 'challenge') {
+      return { kind: 'continue', outcome };
+    }
+    return { kind: 'expired' };
+  }
+
+  private async keepPasswordAttempt(
+    envelope: ChallengeEnvelope,
+    patch: (patch: ChallengePatch) => Promise<void>,
+    attempts: number,
+    now: Date,
+    decision: ChallengeDecision,
+  ): Promise<ChallengeDecision> {
+    const nextAttempts = attempts + 1;
+    await patch({
+      encryptedSession: this.cipher.encrypt(
+        JSON.stringify({
+          session: envelope.session,
+          username: envelope.username,
+          requiredAttributes: envelope.requiredAttributes,
+          attempts: nextAttempts,
+        } satisfies ChallengeEnvelope),
+      ),
+      ...(nextAttempts >= MAX_CHALLENGE_PASSWORD_ATTEMPTS
+        ? { consumedAt: now }
+        : {}),
+    });
+    return decision;
+  }
+
+  private async settleChallenge(
+    decision: ChallengeDecision,
+    input: {
+      previousSessionId?: string;
+      client: ClientContext;
+    },
+  ): Promise<AuthContinuation> {
+    if (decision.kind === 'continue') {
+      return this.continueAuthentication(
+        decision.outcome,
+        input.previousSessionId,
+        input.client,
+        true,
+      );
+    }
+    if (decision.kind === 'invalid_password') {
+      this.audit(
+        'AUTH_CHALLENGE_FAILED',
+        'failure',
+        input.client,
+        undefined,
+        'password_policy',
+      );
+      throw new InvalidPasswordError();
+    }
+    if (decision.kind === 'invalid_parameter') {
+      this.audit(
+        'AUTH_CHALLENGE_FAILED',
+        'failure',
+        input.client,
+        undefined,
+        'parameter',
+      );
+      throw new InvalidChallengeRequestError();
+    }
+    if (decision.kind === 'unavailable') {
+      this.audit(
+        'AUTH_CHALLENGE_FAILED',
+        'failure',
+        input.client,
+        undefined,
+        'unavailable',
+      );
+      throw new AuthUnavailableError();
+    }
+    if (decision.kind === 'throttled') {
+      this.audit(
+        'AUTH_CHALLENGE_FAILED',
+        'failure',
+        input.client,
+        undefined,
+        'rate_limited',
+      );
+      throw new RateLimitedError();
+    }
+    if (decision.kind === 'rejected') {
+      this.audit(
+        'AUTH_CHALLENGE_FAILED',
+        'failure',
+        input.client,
+        undefined,
+        'rejected',
+      );
+      throw new LoginRejected('rejected');
+    }
+    this.audit(
+      'AUTH_CHALLENGE_FAILED',
+      'failure',
+      input.client,
+      undefined,
+      'expired',
+    );
+    throw new ChallengeExpiredError();
   }
 
   private readEnvelope(payload: string): ChallengeEnvelope | null {
@@ -646,13 +827,17 @@ export class BffAuthService {
       const parsed = JSON.parse(
         this.cipher.decrypt(payload),
       ) as Partial<ChallengeEnvelope>;
+      const attempts = parsed.attempts ?? 0;
       if (
         typeof parsed.session !== 'string' ||
         typeof parsed.username !== 'string' ||
         !Array.isArray(parsed.requiredAttributes) ||
         parsed.requiredAttributes.some(
           (attribute) => typeof attribute !== 'string',
-        )
+        ) ||
+        !Number.isInteger(attempts) ||
+        attempts < 0 ||
+        attempts > MAX_CHALLENGE_PASSWORD_ATTEMPTS
       ) {
         return null;
       }
@@ -660,6 +845,7 @@ export class BffAuthService {
         session: parsed.session,
         username: parsed.username,
         requiredAttributes: parsed.requiredAttributes,
+        attempts,
       };
     } catch {
       return null;
@@ -723,6 +909,70 @@ export class BffAuthService {
       }),
     );
   }
+}
+
+type ChallengeDecision =
+  | { kind: 'continue'; outcome: CognitoAuthOutcome }
+  | { kind: 'invalid_password' }
+  | { kind: 'invalid_parameter' }
+  | { kind: 'expired' }
+  | { kind: 'unavailable' }
+  | { kind: 'throttled' }
+  | { kind: 'rejected' };
+
+function newPasswordResponses(
+  required: readonly string[],
+  newPassword: string,
+  provided: Record<string, string> | undefined,
+): Record<string, string> | null {
+  const responses: Record<string, string> = { NEW_PASSWORD: newPassword };
+  for (const name of required) {
+    const key = cognitoUserAttributeKey(name);
+    if (!key) {
+      return null;
+    }
+    const bare = key.slice('userAttributes.'.length);
+    const value = attributeValue(
+      bare,
+      provided?.[name] ?? provided?.[key] ?? provided?.[bare],
+    );
+    if (!value) {
+      return null;
+    }
+    responses[key] = value;
+  }
+  return responses;
+}
+
+function cognitoUserAttributeKey(name: string): string | null {
+  const bare = name.startsWith('userAttributes.')
+    ? name.slice('userAttributes.'.length)
+    : name;
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(bare)) {
+    return null;
+  }
+  return `userAttributes.${bare}`;
+}
+
+function attributeValue(name: string, value: string | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (
+    trimmed.length < 1 ||
+    trimmed.length > 2048 ||
+    /[\u0000-\u001f\u007f]/.test(trimmed)
+  ) {
+    return null;
+  }
+  if (name === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    return null;
+  }
+  if (name === 'phone_number' && !/^\+[1-9]\d{6,14}$/.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
 }
 
 class LoginRejected extends Error {

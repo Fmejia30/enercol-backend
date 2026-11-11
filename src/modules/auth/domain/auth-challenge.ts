@@ -18,4 +18,5 @@ export interface ChallengeEnvelope {
   session: string;
   username: string;
   requiredAttributes: string[];
+  attempts?: number;
 }

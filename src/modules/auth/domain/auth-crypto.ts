@@ -6,6 +6,7 @@ import {
 } from 'node:crypto';
 
 export const AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+export const MAX_CHALLENGE_PASSWORD_ATTEMPTS = 5;
 export const ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
 export const ATTEMPT_LIMIT = 10;
 export const ACCESS_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;

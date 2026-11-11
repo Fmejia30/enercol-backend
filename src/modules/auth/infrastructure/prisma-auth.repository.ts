@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../infrastructure/database/prisma.service.js';
 import type {
   AuthRepository,
+  ChallengePatch,
   NewAuthChallenge,
   NewAuthSession,
   SessionPatch,
@@ -15,7 +16,9 @@ export class PrismaAuthRepository implements AuthRepository {
 
   async deleteExpiredChallenges(now: Date): Promise<void> {
     await this.prisma.authChallenge.deleteMany({
-      where: { expiresAt: { lt: now } },
+      where: {
+        OR: [{ expiresAt: { lt: now } }, { consumedAt: { not: null } }],
+      },
     });
   }
 
@@ -47,6 +50,50 @@ export class PrismaAuthRepository implements AuthRepository {
       expiresAt: row.expiresAt,
       consumedAt: row.consumedAt,
     };
+  }
+
+  async withChallengeLock<T>(
+    challengeIdHash: string,
+    work: (
+      challenge: StoredAuthChallenge | null,
+      patch: (patch: ChallengePatch) => Promise<void>,
+    ) => Promise<T>,
+  ): Promise<T> {
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT id FROM auth_challenge
+          WHERE challenge_id_hash = ${challengeIdHash}
+          FOR UPDATE
+        `;
+        const row = await tx.authChallenge.findUnique({
+          where: { challengeIdHash },
+        });
+        const challenge = row
+          ? {
+              challengeName: row.challengeName,
+              encryptedSession: row.encryptedSession,
+              expiresAt: row.expiresAt,
+              consumedAt: row.consumedAt,
+            }
+          : null;
+        return work(challenge, async (patch) => {
+          if (!row) {
+            return;
+          }
+          await tx.authChallenge.update({
+            where: { challengeIdHash },
+            data: {
+              ...(patch.encryptedSession
+                ? { encryptedSession: patch.encryptedSession }
+                : {}),
+              ...(patch.consumedAt ? { consumedAt: patch.consumedAt } : {}),
+            },
+          });
+        });
+      },
+      { timeout: 15_000, maxWait: 5_000 },
+    );
   }
 
   async saveSession(session: NewAuthSession): Promise<void> {

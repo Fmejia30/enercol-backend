@@ -6,6 +6,7 @@ import { PrismaModule } from './infrastructure/database/prisma.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { IdentityAccessModule } from './modules/identity-access/identity-access.module.js';
+import { UsersModule } from './modules/users/users.module.js';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { IdentityAccessModule } from './modules/identity-access/identity-access.
     PrismaModule,
     IdentityAccessModule,
     AuthModule,
+    UsersModule,
     HealthModule,
   ],
 })

@@ -23,6 +23,19 @@ import {
 } from '../domain/auth-challenge.js';
 import { secretHash } from '../domain/auth-crypto.js';
 
+export function cognitoChallengeResponses(input: {
+  username: string;
+  clientId: string;
+  clientSecret: string;
+  responses: Record<string, string>;
+}): Record<string, string> {
+  return {
+    USERNAME: input.username,
+    SECRET_HASH: secretHash(input.username, input.clientId, input.clientSecret),
+    ...input.responses,
+  };
+}
+
 const REJECTED_EXCEPTIONS = new Set([
   'NotAuthorizedException',
   'UserNotFoundException',
@@ -87,20 +100,17 @@ export class CognitoIdentityClient implements CognitoIdentityGateway {
           ClientId: this.clientId,
           ChallengeName: input.challengeName as ChallengeNameType,
           Session: input.session,
-          ChallengeResponses: {
-            USERNAME: input.username,
-            SECRET_HASH: secretHash(
-              input.username,
-              this.clientId,
-              this.clientSecret,
-            ),
-            ...input.responses,
-          },
+          ChallengeResponses: cognitoChallengeResponses({
+            username: input.username,
+            clientId: this.clientId,
+            clientSecret: this.clientSecret,
+            responses: input.responses,
+          }),
         }),
       );
       return this.mapAuthResponse(response, input.username);
     } catch (error) {
-      return this.mapFailure(error);
+      return this.mapFailure(error, 'challenge');
     }
   }
 
@@ -234,12 +244,29 @@ export class CognitoIdentityClient implements CognitoIdentityGateway {
     };
   }
 
-  private mapFailure(error: unknown): CognitoAuthOutcome {
+  private mapFailure(
+    error: unknown,
+    mode: 'login' | 'challenge' = 'login',
+  ): CognitoAuthOutcome {
     const name = error instanceof Error ? error.name : 'Unknown';
     if (/^[A-Za-z]+Exception$/.test(name)) {
       this.logger.warn(`Cognito rechazó la operación: ${name}`);
     } else {
       this.logger.warn('Cognito no pudo completar la operación');
+    }
+    if (mode === 'challenge') {
+      if (name === 'InvalidPasswordException') {
+        return { kind: 'invalid_password' };
+      }
+      if (name === 'InvalidParameterException') {
+        return { kind: 'invalid_parameter' };
+      }
+      if (
+        name === 'NotAuthorizedException' ||
+        name === 'ExpiredCodeException'
+      ) {
+        return { kind: 'session_expired' };
+      }
     }
     if (REJECTED_EXCEPTIONS.has(name)) return { kind: 'rejected' };
     if (

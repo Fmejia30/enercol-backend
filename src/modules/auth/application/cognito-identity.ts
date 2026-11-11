@@ -25,6 +25,9 @@ export type CognitoAuthOutcome =
   | { kind: 'tokens'; tokens: CognitoTokenSet }
   | { kind: 'challenge'; challenge: CognitoChallenge }
   | { kind: 'rejected' }
+  | { kind: 'invalid_password' }
+  | { kind: 'invalid_parameter' }
+  | { kind: 'session_expired' }
   | { kind: 'throttled' }
   | { kind: 'unavailable' };
 

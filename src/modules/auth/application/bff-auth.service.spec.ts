@@ -4,13 +4,17 @@ import { UserRole } from '../../identity-access/domain/user-role.js';
 import { SessionRejectedError } from '../../identity-access/application/session-authenticator.js';
 import type { TokenVerifier } from '../../identity-access/application/token-verifier.js';
 import {
+  AuthUnavailableError,
   BffAuthService,
+  ChallengeExpiredError,
   CsrfRejectedError,
+  InvalidPasswordError,
   LoginRejected,
   RateLimitedError,
 } from './bff-auth.service.js';
 import type {
   AuthRepository,
+  ChallengePatch,
   NewAuthChallenge,
   NewAuthSession,
   SessionPatch,
@@ -176,11 +180,15 @@ describe('BffAuthService', () => {
       client: CLIENT,
     });
     expect(completed.kind).toBe('session');
+    expect(repository.sessions.size).toBe(1);
+    expect(JSON.stringify(completed)).not.toContain('access-token');
+    expect(JSON.stringify(completed)).not.toContain('refresh-token');
+    expect(JSON.stringify(completed)).not.toContain('cognito-session');
     expect(identity.respondToChallenge).toHaveBeenCalledWith({
       challengeName: 'NEW_PASSWORD_REQUIRED',
       session: 'cognito-session',
       username: 'usuario@empresa.com',
-      responses: { NEW_PASSWORD: 'new-secret', name: 'Ada' },
+      responses: { NEW_PASSWORD: 'new-secret', 'userAttributes.name': 'Ada' },
     });
 
     await expect(
@@ -190,7 +198,378 @@ describe('BffAuthService', () => {
         attributes: { name: 'Ada' },
         client: CLIENT,
       }),
-    ).rejects.toBeInstanceOf(LoginRejected);
+    ).rejects.toBeInstanceOf(ChallengeExpiredError);
+    expect(repository.sessions.size).toBe(1);
+  });
+
+  it('does not open a session until the new-password challenge is completed', async () => {
+    const { service, repository, identity } = setup();
+    identity.initiatePasswordAuth = jest
+      .fn<CognitoIdentityGateway['initiatePasswordAuth']>()
+      .mockResolvedValue({
+        kind: 'challenge',
+        challenge: {
+          name: 'NEW_PASSWORD_REQUIRED',
+          session: 'cognito-session',
+          username: 'usuario@empresa.com',
+          requiredAttributes: [],
+        },
+      });
+
+    const pending = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'temporary',
+      client: CLIENT,
+    });
+
+    expect(pending.kind).toBe('challenge');
+    expect(repository.sessions.size).toBe(0);
+    expect(JSON.stringify(pending)).not.toContain('access-token');
+  });
+
+  it('sends only the required attributes with the Cognito userAttributes prefix', async () => {
+    const { service, identity } = setup();
+    identity.initiatePasswordAuth = jest
+      .fn<CognitoIdentityGateway['initiatePasswordAuth']>()
+      .mockResolvedValue({
+        kind: 'challenge',
+        challenge: {
+          name: 'NEW_PASSWORD_REQUIRED',
+          session: 'cognito-session',
+          username: 'usuario@empresa.com',
+          requiredAttributes: ['email', 'userAttributes.phone_number'],
+        },
+      });
+    const pending = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'temporary',
+      client: CLIENT,
+    });
+    if (pending.kind !== 'challenge') throw new Error('expected challenge');
+
+    await service.challenge({
+      challengeId: pending.challengeId,
+      newPassword: 'new-secret',
+      attributes: {
+        email: ' usuario@empresa.com ',
+        'userAttributes.phone_number': '+573000000000',
+        name: 'No solicitado',
+      },
+      client: CLIENT,
+    });
+
+    expect(identity.respondToChallenge).toHaveBeenCalledWith({
+      challengeName: 'NEW_PASSWORD_REQUIRED',
+      session: 'cognito-session',
+      username: 'usuario@empresa.com',
+      responses: {
+        NEW_PASSWORD: 'new-secret',
+        'userAttributes.email': 'usuario@empresa.com',
+        'userAttributes.phone_number': '+573000000000',
+      },
+    });
+  });
+
+  it('rejects a required attribute whose value has the wrong format', async () => {
+    const { service, repository, identity } = setup();
+    identity.initiatePasswordAuth = jest
+      .fn<CognitoIdentityGateway['initiatePasswordAuth']>()
+      .mockResolvedValue({
+        kind: 'challenge',
+        challenge: {
+          name: 'NEW_PASSWORD_REQUIRED',
+          session: 'cognito-session',
+          username: 'usuario@empresa.com',
+          requiredAttributes: ['email'],
+        },
+      });
+    const pending = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'temporary',
+      client: CLIENT,
+    });
+    if (pending.kind !== 'challenge') throw new Error('expected challenge');
+
+    await expect(
+      service.challenge({
+        challengeId: pending.challengeId,
+        newPassword: 'new-secret',
+        attributes: { email: 'not-an-email' },
+        client: CLIENT,
+      }),
+    ).rejects.toMatchObject({ name: 'InvalidChallengeRequestError' });
+    expect(identity.respondToChallenge).not.toHaveBeenCalled();
+    expect(repository.sessions.size).toBe(0);
+    expect([...repository.challenges.values()][0]?.consumedAt).toBeNull();
+  });
+
+  it('keeps the challenge usable when the new password violates the policy', async () => {
+    const { service, repository, identity } = setup();
+    identity.initiatePasswordAuth = jest
+      .fn<CognitoIdentityGateway['initiatePasswordAuth']>()
+      .mockResolvedValue({
+        kind: 'challenge',
+        challenge: {
+          name: 'NEW_PASSWORD_REQUIRED',
+          session: 'cognito-session',
+          username: 'usuario@empresa.com',
+          requiredAttributes: [],
+        },
+      });
+    identity.respondToChallenge = jest
+      .fn<CognitoIdentityGateway['respondToChallenge']>()
+      .mockResolvedValueOnce({ kind: 'invalid_password' })
+      .mockResolvedValueOnce(tokens());
+    const pending = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'temporary',
+      client: CLIENT,
+    });
+    if (pending.kind !== 'challenge') throw new Error('expected challenge');
+
+    await expect(
+      service.challenge({
+        challengeId: pending.challengeId,
+        newPassword: 'policy-secret-value',
+        client: CLIENT,
+      }),
+    ).rejects.toBeInstanceOf(InvalidPasswordError);
+    expect(repository.sessions.size).toBe(0);
+    const stored = [...repository.challenges.values()][0];
+    expect(stored?.consumedAt).toBeNull();
+    expect(cipher.decrypt(stored?.encryptedSession ?? '')).not.toContain(
+      'policy-secret-value',
+    );
+
+    const completed = await service.challenge({
+      challengeId: pending.challengeId,
+      newPassword: 'accepted-secret',
+      client: CLIENT,
+    });
+    expect(completed.kind).toBe('session');
+    expect(repository.sessions.size).toBe(1);
+  });
+
+  it('stops password retries after five policy failures', async () => {
+    const { service, repository, identity } = setup();
+    identity.initiatePasswordAuth = jest
+      .fn<CognitoIdentityGateway['initiatePasswordAuth']>()
+      .mockResolvedValue({
+        kind: 'challenge',
+        challenge: {
+          name: 'NEW_PASSWORD_REQUIRED',
+          session: 'cognito-session',
+          username: 'usuario@empresa.com',
+          requiredAttributes: [],
+        },
+      });
+    identity.respondToChallenge = jest
+      .fn<CognitoIdentityGateway['respondToChallenge']>()
+      .mockResolvedValue({ kind: 'invalid_password' });
+    const pending = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'temporary',
+      client: CLIENT,
+    });
+    if (pending.kind !== 'challenge') throw new Error('expected challenge');
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(
+        service.challenge({
+          challengeId: pending.challengeId,
+          newPassword: `policy-secret-${attempt}`,
+          client: CLIENT,
+        }),
+      ).rejects.toBeInstanceOf(InvalidPasswordError);
+    }
+    await expect(
+      service.challenge({
+        challengeId: pending.challengeId,
+        newPassword: 'policy-secret-later',
+        client: CLIENT,
+      }),
+    ).rejects.toBeInstanceOf(ChallengeExpiredError);
+    expect(identity.respondToChallenge).toHaveBeenCalledTimes(5);
+    expect(repository.sessions.size).toBe(0);
+    expect(cipher.decrypt(
+      [...repository.challenges.values()][0]?.encryptedSession ?? '',
+    )).not.toContain('policy-secret');
+  });
+
+  it('rejects an expired challenge without calling Cognito', async () => {
+    const { service, repository, identity } = setup();
+    identity.initiatePasswordAuth = jest
+      .fn<CognitoIdentityGateway['initiatePasswordAuth']>()
+      .mockResolvedValue({
+        kind: 'challenge',
+        challenge: {
+          name: 'NEW_PASSWORD_REQUIRED',
+          session: 'cognito-session',
+          username: 'usuario@empresa.com',
+          requiredAttributes: [],
+        },
+      });
+    const pending = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'temporary',
+      client: CLIENT,
+    });
+    if (pending.kind !== 'challenge') throw new Error('expected challenge');
+    const stored = [...repository.challenges.values()][0];
+    if (!stored) throw new Error('missing challenge');
+    stored.expiresAt = new Date(NOW.getTime() - 1);
+
+    await expect(
+      service.challenge({
+        challengeId: pending.challengeId,
+        newPassword: 'new-secret',
+        client: CLIENT,
+      }),
+    ).rejects.toBeInstanceOf(ChallengeExpiredError);
+    expect(identity.respondToChallenge).not.toHaveBeenCalled();
+    expect(repository.sessions.size).toBe(0);
+  });
+
+  it('invalidates the challenge when Cognito reports that the session ended', async () => {
+    const { service, repository, identity } = setup();
+    identity.initiatePasswordAuth = jest
+      .fn<CognitoIdentityGateway['initiatePasswordAuth']>()
+      .mockResolvedValue({
+        kind: 'challenge',
+        challenge: {
+          name: 'NEW_PASSWORD_REQUIRED',
+          session: 'cognito-session',
+          username: 'usuario@empresa.com',
+          requiredAttributes: [],
+        },
+      });
+    identity.respondToChallenge = jest
+      .fn<CognitoIdentityGateway['respondToChallenge']>()
+      .mockResolvedValue({ kind: 'session_expired' });
+    const pending = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'temporary',
+      client: CLIENT,
+    });
+    if (pending.kind !== 'challenge') throw new Error('expected challenge');
+
+    await expect(
+      service.challenge({
+        challengeId: pending.challengeId,
+        newPassword: 'new-secret',
+        client: CLIENT,
+      }),
+    ).rejects.toBeInstanceOf(ChallengeExpiredError);
+    await expect(
+      service.challenge({
+        challengeId: pending.challengeId,
+        newPassword: 'new-secret',
+        client: CLIENT,
+      }),
+    ).rejects.toBeInstanceOf(ChallengeExpiredError);
+    expect(identity.respondToChallenge).toHaveBeenCalledTimes(1);
+    expect(repository.sessions.size).toBe(0);
+  });
+
+  it('leaves the challenge available when Cognito is unavailable', async () => {
+    const { service, repository, identity } = setup();
+    identity.initiatePasswordAuth = jest
+      .fn<CognitoIdentityGateway['initiatePasswordAuth']>()
+      .mockResolvedValue({
+        kind: 'challenge',
+        challenge: {
+          name: 'NEW_PASSWORD_REQUIRED',
+          session: 'cognito-session',
+          username: 'usuario@empresa.com',
+          requiredAttributes: [],
+        },
+      });
+    identity.respondToChallenge = jest
+      .fn<CognitoIdentityGateway['respondToChallenge']>()
+      .mockResolvedValueOnce({ kind: 'unavailable' })
+      .mockResolvedValueOnce(tokens());
+    const pending = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'temporary',
+      client: CLIENT,
+    });
+    if (pending.kind !== 'challenge') throw new Error('expected challenge');
+
+    await expect(
+      service.challenge({
+        challengeId: pending.challengeId,
+        newPassword: 'new-secret',
+        client: CLIENT,
+      }),
+    ).rejects.toBeInstanceOf(AuthUnavailableError);
+    expect(repository.sessions.size).toBe(0);
+    await expect(
+      service.challenge({
+        challengeId: pending.challengeId,
+        newPassword: 'new-secret',
+        client: CLIENT,
+      }),
+    ).resolves.toMatchObject({ kind: 'session' });
+  });
+
+  it('lets only one concurrent response complete the same challenge', async () => {
+    const { service, repository, identity } = setup();
+    identity.initiatePasswordAuth = jest
+      .fn<CognitoIdentityGateway['initiatePasswordAuth']>()
+      .mockResolvedValue({
+        kind: 'challenge',
+        challenge: {
+          name: 'NEW_PASSWORD_REQUIRED',
+          session: 'cognito-session',
+          username: 'usuario@empresa.com',
+          requiredAttributes: [],
+        },
+      });
+    let release: () => void = () => undefined;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    identity.respondToChallenge = jest.fn<
+      CognitoIdentityGateway['respondToChallenge']
+    >(async () => {
+      calls += 1;
+      if (calls === 1) {
+        await hold;
+      }
+      return tokens();
+    });
+    const pending = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'temporary',
+      client: CLIENT,
+    });
+    if (pending.kind !== 'challenge') throw new Error('expected challenge');
+
+    const first = service.challenge({
+      challengeId: pending.challengeId,
+      newPassword: 'new-secret',
+      client: CLIENT,
+    });
+    await waitFor(() => calls === 1);
+    const second = service.challenge({
+      challengeId: pending.challengeId,
+      newPassword: 'new-secret',
+      client: CLIENT,
+    });
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    release();
+    const results = await Promise.allSettled([first, second]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(
+      1,
+    );
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(
+      1,
+    );
+    expect(calls).toBe(1);
+    expect(repository.sessions.size).toBe(1);
   });
 
   it('revokes the local session when Cognito revocation fails', async () => {
@@ -284,7 +663,7 @@ describe('BffAuthService', () => {
     stored.accessTokenExpiresAt = new Date(NOW.getTime() + 5 * 60 * 1000);
 
     await expect(service.authenticate(result.sessionId)).resolves.toMatchObject(
-      { userId: 'user-1' },
+      { userId: 'user-1', email: 'usuario@empresa.com' },
     );
     expect(identity.refresh).toHaveBeenCalledTimes(1);
     expect(stored.sessionIdHash).toBe(sessionHash);
@@ -338,8 +717,16 @@ describe('BffAuthService', () => {
     releaseRefresh();
 
     await expect(Promise.all([first, second])).resolves.toEqual([
-      { userId: 'user-1', roles: [UserRole.SPECIALIST] },
-      { userId: 'user-1', roles: [UserRole.SPECIALIST] },
+      {
+        userId: 'user-1',
+        email: 'usuario@empresa.com',
+        roles: [UserRole.SPECIALIST],
+      },
+      {
+        userId: 'user-1',
+        email: 'usuario@empresa.com',
+        roles: [UserRole.SPECIALIST],
+      },
     ]);
     expect(identity.refresh).toHaveBeenCalledTimes(1);
     expect(stored.sessionIdHash).toBe(sha256Hex(result.sessionId));
@@ -405,6 +792,16 @@ describe('BffAuthService', () => {
   });
 });
 
+async function waitFor(ready: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (ready()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error('condition was not reached');
+}
+
 function tokens(): CognitoAuthOutcome {
   return {
     kind: 'tokens',
@@ -434,10 +831,13 @@ class MemoryAuthRepository implements AuthRepository {
   >();
   readonly sessions = new Map<string, StoredAuthSession>();
   private readonly locks = new Map<string, Promise<void>>();
+  private readonly challengeLocks = new Map<string, Promise<void>>();
 
   async deleteExpiredChallenges(now: Date): Promise<void> {
     for (const [hash, challenge] of this.challenges) {
-      if (challenge.expiresAt < now) this.challenges.delete(hash);
+      if (challenge.expiresAt < now || challenge.consumedAt) {
+        this.challenges.delete(hash);
+      }
     }
   }
 
@@ -458,6 +858,42 @@ class MemoryAuthRepository implements AuthRepository {
     }
     challenge.consumedAt = now;
     return challenge;
+  }
+
+  async withChallengeLock<T>(
+    challengeIdHash: string,
+    work: (
+      challenge: StoredAuthChallenge | null,
+      patch: (patch: ChallengePatch) => Promise<void>,
+    ) => Promise<T>,
+  ): Promise<T> {
+    const previous =
+      this.challengeLocks.get(challengeIdHash) ?? Promise.resolve();
+    let release: () => void = () => undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.challengeLocks.set(
+      challengeIdHash,
+      previous.then(() => current),
+    );
+    await previous;
+    try {
+      const challenge = this.challenges.get(challengeIdHash) ?? null;
+      return await work(challenge, async (patch) => {
+        if (!challenge) {
+          return;
+        }
+        if (patch.encryptedSession) {
+          challenge.encryptedSession = patch.encryptedSession;
+        }
+        if (patch.consumedAt) {
+          challenge.consumedAt = patch.consumedAt;
+        }
+      });
+    } finally {
+      release();
+    }
   }
 
   async saveSession(session: NewAuthSession): Promise<void> {

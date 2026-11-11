@@ -7,7 +7,9 @@ import request from 'supertest';
 import { UserRole } from '../../identity-access/domain/user-role.js';
 import {
   BffAuthService,
+  ChallengeExpiredError,
   CsrfRejectedError,
+  InvalidPasswordError,
   LoginRejected,
 } from '../application/bff-auth.service.js';
 import { configureApp } from '../../../shared/http/configure-app.js';
@@ -113,6 +115,96 @@ describe('AuthController', () => {
       .expect(200);
     expect(response.body).toEqual({ authenticated: false });
     expect(auth.readSession).toHaveBeenCalledWith(undefined);
+  });
+
+  it('completes a challenge from the allowed origin and withholds session cookies until it succeeds', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/challenge')
+      .send({ challengeId: 'opaque-challenge', newPassword: 'Secret123' })
+      .expect(403);
+    expect(auth.challenge).not.toHaveBeenCalled();
+
+    auth.challenge.mockResolvedValueOnce({
+      kind: 'challenge' as const,
+      challengeId: 'opaque-challenge',
+      challengeName: 'NEW_PASSWORD_REQUIRED',
+      requiredAttributes: ['email'],
+    });
+    const pending = await request(app.getHttpServer())
+      .post('/api/v1/auth/challenge')
+      .set('Origin', 'http://localhost:5173')
+      .send({ challengeId: 'opaque-challenge', newPassword: 'Secret123' })
+      .expect(200);
+    expect(pending.body).toEqual({
+      authenticated: false,
+      challenge: {
+        id: 'opaque-challenge',
+        name: 'NEW_PASSWORD_REQUIRED',
+        requiredAttributes: ['email'],
+      },
+    });
+    expect(pending.headers['set-cookie']).toBeUndefined();
+    expect(JSON.stringify(pending.body)).not.toMatch(
+      /accessToken|refreshToken|idToken|Secret123/i,
+    );
+
+    auth.challenge.mockRejectedValueOnce(new InvalidPasswordError());
+    const rejected = await request(app.getHttpServer())
+      .post('/api/v1/auth/challenge')
+      .set('Origin', 'http://localhost:5173')
+      .send({ challengeId: 'opaque-challenge', newPassword: 'Secret123' })
+      .expect(400);
+    expect(rejected.body.message).toBe(
+      'La contraseña no cumple la política de seguridad',
+    );
+    expect(rejected.headers['set-cookie']).toBeUndefined();
+    expect(JSON.stringify(rejected.body)).not.toContain('Secret123');
+    expect(JSON.stringify(rejected.body)).not.toMatch(
+      /InvalidPassword|NotAuthorized|cognito-session/i,
+    );
+
+    auth.challenge.mockResolvedValueOnce({
+      kind: 'session' as const,
+      sessionId: 'session-id',
+      csrfToken: 'csrf-token',
+      user: {
+        id: 'user-1',
+        email: 'usuario@empresa.com',
+        roles: [UserRole.SPECIALIST],
+      },
+    });
+    const completed = await request(app.getHttpServer())
+      .post('/api/v1/auth/challenge')
+      .set('Origin', 'http://localhost:5173')
+      .send({ challengeId: 'opaque-challenge', newPassword: 'Secret123' })
+      .expect(200);
+    expect(completed.body).toEqual({
+      authenticated: true,
+      csrfToken: 'csrf-token',
+      user: {
+        id: 'user-1',
+        email: 'usuario@empresa.com',
+        roles: [UserRole.SPECIALIST],
+      },
+    });
+    const cookies = completed.headers['set-cookie'];
+    expect(cookies?.join(';')).toContain('enercol_session=session-id');
+    expect(cookies?.join(';')).toContain('HttpOnly');
+    expect(JSON.stringify(completed.body)).not.toMatch(
+      /accessToken|refreshToken|idToken|Secret123/i,
+    );
+
+    auth.challenge.mockRejectedValueOnce(new ChallengeExpiredError());
+    const reused = await request(app.getHttpServer())
+      .post('/api/v1/auth/challenge')
+      .set('Origin', 'http://localhost:5173')
+      .send({ challengeId: 'opaque-challenge', newPassword: 'Secret123' })
+      .expect(401);
+    expect(reused.body.message).toBe(
+      'El proceso de activación expiró. Inicie sesión de nuevo.',
+    );
+    expect(reused.headers['set-cookie']).toBeUndefined();
+    expect(JSON.stringify(reused.body)).not.toContain('Secret123');
   });
 
   it('rejects logout from another origin and a CSRF mismatch', async () => {

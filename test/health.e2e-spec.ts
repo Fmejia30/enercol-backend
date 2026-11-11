@@ -28,12 +28,32 @@ describe('Health (e2e)', () => {
     return app;
   }
 
-  it('GET /api/v1/health returns 200 when PostgreSQL responds', async () => {
+  it('GET /api/v1/health/live returns 200 without consulting PostgreSQL', async () => {
+    const app = await createApp(false);
+
+    try {
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/health/live')
+        .expect(200);
+
+      expect(response.body).toMatchObject({
+        status: 'ok',
+        service: 'enercol-backend',
+        checks: {},
+      });
+      expect(response.body.timestamp).toEqual(expect.any(String));
+      expect(response.body.checks.database).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('GET /api/v1/health/ready returns 200 when PostgreSQL responds', async () => {
     const app = await createApp(true);
 
     try {
       const response = await request(app.getHttpServer())
-        .get('/api/v1/health')
+        .get('/api/v1/health/ready')
         .expect(200);
 
       expect(response.body).toMatchObject({
@@ -47,12 +67,12 @@ describe('Health (e2e)', () => {
     }
   });
 
-  it('GET /api/v1/health returns 503 when PostgreSQL does not respond', async () => {
+  it('GET /api/v1/health/ready returns 503 when PostgreSQL does not respond', async () => {
     const app = await createApp(false);
 
     try {
       const response = await request(app.getHttpServer())
-        .get('/api/v1/health')
+        .get('/api/v1/health/ready')
         .expect(503);
 
       expect(response.body).toMatchObject({

@@ -103,8 +103,9 @@ describe('Identity access (e2e)', () => {
     await app.close();
   });
 
-  it('keeps the health check public', async () => {
-    await request(app.getHttpServer()).get('/api/v1/health').expect(200);
+  it('keeps the health checks public', async () => {
+    await request(app.getHttpServer()).get('/api/v1/health/live').expect(200);
+    await request(app.getHttpServer()).get('/api/v1/health/ready').expect(200);
   });
 
   it('rejects anonymous and invalid tokens with 401 and without verifier details', async () => {
