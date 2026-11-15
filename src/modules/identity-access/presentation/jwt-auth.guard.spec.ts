@@ -76,6 +76,7 @@ describe('JwtAuthGuard', () => {
     ).resolves.toBe(true);
     expect(verify).toHaveBeenCalledWith('access-token');
     expect(request.user).toEqual(authenticatedUser);
+    expect(request.authenticatedBySession).toBeUndefined();
   });
 
   it.each([
@@ -115,7 +116,7 @@ describe('JwtAuthGuard', () => {
         cookie: 'enercol_session=session-id',
         authorization: 'Bearer access-token',
       },
-    };
+    } as AuthenticatedRequest;
     const guard = new JwtAuthGuard(
       reflector,
       { verify },
@@ -135,6 +136,7 @@ describe('JwtAuthGuard', () => {
       userId: 'session-user',
       roles: [UserRole.SPECIALIST],
     });
+    expect(request.authenticatedBySession).toBe(true);
   });
 
   it('returns 401 when the session cookie is rejected and ignores the bearer token', async () => {

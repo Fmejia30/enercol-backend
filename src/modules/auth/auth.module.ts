@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { PrismaModule } from '../../infrastructure/database/prisma.module.js';
 import { SESSION_AUTHENTICATOR } from '../identity-access/application/session-authenticator.js';
 import { IdentityAccessModule } from '../identity-access/identity-access.module.js';
@@ -13,6 +14,7 @@ import { PrismaAuthRepository } from './infrastructure/prisma-auth.repository.js
 import { TokenCipher } from './infrastructure/token-cipher.js';
 import { AuthController } from './presentation/auth.controller.js';
 import { AuthCookies } from './presentation/auth-cookies.js';
+import { CsrfGuard } from './presentation/csrf.guard.js';
 
 @Global()
 @Module({
@@ -41,6 +43,10 @@ import { AuthCookies } from './presentation/auth-cookies.js';
     {
       provide: SESSION_AUTHENTICATOR,
       useClass: BffSessionAuthenticator,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: CsrfGuard,
     },
   ],
   exports: [SESSION_AUTHENTICATOR],

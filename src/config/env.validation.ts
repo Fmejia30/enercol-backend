@@ -101,6 +101,42 @@ class EnvironmentVariables {
   @IsOptional()
   @IsIn(['lax', 'strict', 'none'])
   COOKIE_SAME_SITE?: 'lax' | 'strict' | 'none';
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^mongodb(?:\+srv)?:\/\/\S+$/)
+  MONGODB_URI?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,64}$/)
+  MONGODB_DB_NAME?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  PRIVACY_ENCRYPTION_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(256)
+  OPENAI_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9._-]{1,64}$/)
+  OPENAI_MODEL?: string;
+
+  @IsOptional()
+  @IsIn(['none', 'low', 'medium', 'high', 'xhigh', 'max'])
+  OPENAI_REASONING_EFFORT?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+  @IsOptional()
+  @IsInt()
+  @Min(16)
+  @Max(128000)
+  OPENAI_MAX_OUTPUT_TOKENS?: number;
 }
 
 export function validateEnv(
@@ -128,6 +164,15 @@ export function validateEnv(
       COOKIE_NAME: config.COOKIE_NAME,
       COOKIE_SECURE: config.COOKIE_SECURE,
       COOKIE_SAME_SITE: config.COOKIE_SAME_SITE,
+      MONGODB_URI: blankToUndefined(config.MONGODB_URI),
+      MONGODB_DB_NAME: blankToUndefined(config.MONGODB_DB_NAME),
+      PRIVACY_ENCRYPTION_KEY: blankToUndefined(config.PRIVACY_ENCRYPTION_KEY),
+      OPENAI_API_KEY: blankToUndefined(config.OPENAI_API_KEY),
+      OPENAI_MODEL: blankToUndefined(config.OPENAI_MODEL),
+      OPENAI_REASONING_EFFORT: blankToUndefined(config.OPENAI_REASONING_EFFORT),
+      OPENAI_MAX_OUTPUT_TOKENS: blankToUndefined(
+        config.OPENAI_MAX_OUTPUT_TOKENS,
+      ),
     },
     { enableImplicitConversion: true },
   );
@@ -204,7 +249,63 @@ export function validateEnv(
     ...(validated.COOKIE_SECURE
       ? { COOKIE_SECURE: validated.COOKIE_SECURE }
       : {}),
+    ...privacyConfiguration(validated),
+    ...openAiConfiguration(validated),
   };
+}
+
+function privacyConfiguration(
+  validated: EnvironmentVariables,
+): Record<string, string> {
+  const uri = validated.MONGODB_URI;
+  const key = validated.PRIVACY_ENCRYPTION_KEY;
+  if (!uri && !key) {
+    return validated.MONGODB_DB_NAME
+      ? { MONGODB_DB_NAME: validated.MONGODB_DB_NAME }
+      : {};
+  }
+  if (!uri || !key) {
+    throw new Error(
+      'Invalid environment configuration: MONGODB_URI and PRIVACY_ENCRYPTION_KEY must both be set',
+    );
+  }
+  if (Buffer.from(key, 'base64').length !== 32) {
+    throw new Error(
+      'Invalid environment configuration: PRIVACY_ENCRYPTION_KEY must decode to 32 bytes',
+    );
+  }
+  return {
+    MONGODB_URI: uri,
+    MONGODB_DB_NAME: validated.MONGODB_DB_NAME ?? 'enercol_privacy',
+    PRIVACY_ENCRYPTION_KEY: key,
+  };
+}
+
+function openAiConfiguration(
+  validated: EnvironmentVariables,
+): Record<string, string | number> {
+  const configured: Record<string, string | number> = {};
+  if (validated.OPENAI_API_KEY) {
+    configured.OPENAI_API_KEY = validated.OPENAI_API_KEY;
+  }
+  if (validated.OPENAI_MODEL) {
+    configured.OPENAI_MODEL = validated.OPENAI_MODEL;
+  }
+  if (validated.OPENAI_REASONING_EFFORT) {
+    configured.OPENAI_REASONING_EFFORT = validated.OPENAI_REASONING_EFFORT;
+  }
+  if (validated.OPENAI_MAX_OUTPUT_TOKENS !== undefined) {
+    configured.OPENAI_MAX_OUTPUT_TOKENS = validated.OPENAI_MAX_OUTPUT_TOKENS;
+  }
+  return configured;
+}
+
+function blankToUndefined(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
 }
 
 function formatValidationErrors(

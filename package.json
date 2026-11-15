@@ -14,18 +14,20 @@
   "scripts": {
     "build": "nest build",
     "prebuild": "prisma generate",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"prisma.config.ts\" \"jest.config.ts\" \"jest.e2e.config.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"prisma/seed.ts\" \"prisma.config.ts\" \"jest.config.ts\" \"jest.e2e.config.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
-    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"prisma.config.ts\" \"jest.config.ts\" \"jest.e2e.config.ts\"",
+    "deploy": "tsx scripts/deploy.ts",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"prisma/seed.ts\" \"prisma.config.ts\" \"jest.config.ts\" \"jest.e2e.config.ts\"",
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand",
     "test:watch": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --watch",
     "test:cov": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage --runInBand",
     "test:e2e": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./jest.e2e.config.ts --runInBand",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:seed": "prisma generate && prisma db seed"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "3.1164.0",
@@ -40,6 +42,8 @@
     "class-transformer": "0.5.1",
     "class-validator": "0.15.1",
     "dotenv": "17.4.2",
+    "mongodb": "7.8.0",
+    "openai": "7.57.0",
     "pg": "8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -63,6 +67,7 @@
     "supertest": "^7.0.0",
     "ts-jest": "29.4.15",
     "ts-node": "10.9.2",
+    "tsx": "^4.23.15",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1"
   }

@@ -617,6 +617,33 @@ describe('BffAuthService', () => {
     expect(identity.revoke).not.toHaveBeenCalled();
   });
 
+  it('accepts the session CSRF token and rejects a missing or invalid token without revoking the session', async () => {
+    const { service, repository } = setup();
+    const result = await service.login({
+      email: 'usuario@empresa.com',
+      password: 'secret-password',
+      client: CLIENT,
+    });
+    if (result.kind !== 'session') throw new Error('expected session');
+
+    await expect(
+      service.assertCsrf(result.sessionId, undefined),
+    ).rejects.toBeInstanceOf(CsrfRejectedError);
+    await expect(
+      service.assertCsrf(result.sessionId, 'wrong'),
+    ).rejects.toBeInstanceOf(CsrfRejectedError);
+    await expect(
+      service.assertCsrf(result.sessionId, result.csrfToken),
+    ).resolves.toBeUndefined();
+    await expect(
+      service.assertCsrf('unknown-session', result.csrfToken),
+    ).rejects.toBeInstanceOf(CsrfRejectedError);
+
+    expect(
+      repository.sessions.get(sha256Hex(result.sessionId))?.revokedAt,
+    ).toBeNull();
+  });
+
   it('rotates tokens inside the session lock and revokes the session if Cognito rejects the refresh token', async () => {
     const { service, repository, identity, accessTokens } = setup();
     const result = await service.login({

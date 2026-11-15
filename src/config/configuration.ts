@@ -1,4 +1,9 @@
 import { NODE_ENVIRONMENTS, type NodeEnvironment } from './env.validation.js';
+import {
+  DEFAULT_OPENAI_MAX_OUTPUT_TOKENS,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_OPENAI_REASONING_EFFORT,
+} from '../modules/technical-reports/infrastructure/openai-settings.js';
 
 export interface AppConfiguration {
   nodeEnv: NodeEnvironment;
@@ -18,6 +23,13 @@ export interface AppConfiguration {
   cookieName: string;
   cookieSecure: boolean;
   cookieSameSite: 'lax' | 'strict' | 'none';
+  mongodbUri: string | null;
+  mongodbDbName: string;
+  privacyEncryptionKey: string | null;
+  openaiApiKey: string | null;
+  openaiModel: string;
+  openaiReasoningEffort: string;
+  openaiMaxOutputTokens: number;
 }
 
 export function configuration(): AppConfiguration {
@@ -54,7 +66,24 @@ export function configuration(): AppConfiguration {
       ? process.env.COOKIE_SECURE === 'true'
       : nodeEnv === 'production',
     cookieSameSite: sameSite(process.env.COOKIE_SAME_SITE),
+    mongodbUri: optionalEnvironmentValue('MONGODB_URI'),
+    mongodbDbName: process.env.MONGODB_DB_NAME?.trim() || 'enercol_privacy',
+    privacyEncryptionKey: optionalEnvironmentValue('PRIVACY_ENCRYPTION_KEY'),
+    openaiApiKey: optionalEnvironmentValue('OPENAI_API_KEY'),
+    openaiModel: process.env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
+    openaiReasoningEffort:
+      process.env.OPENAI_REASONING_EFFORT?.trim() ||
+      DEFAULT_OPENAI_REASONING_EFFORT,
+    openaiMaxOutputTokens: numericEnvironmentValue(
+      'OPENAI_MAX_OUTPUT_TOKENS',
+      DEFAULT_OPENAI_MAX_OUTPUT_TOKENS,
+    ),
   };
+}
+
+function optionalEnvironmentValue(name: string): string | null {
+  const value = process.env[name]?.trim();
+  return value ? value : null;
 }
 
 function requiredEnvironmentValue(name: string): string {

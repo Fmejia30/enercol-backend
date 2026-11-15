@@ -7,6 +7,9 @@ import { HealthModule } from './modules/health/health.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { IdentityAccessModule } from './modules/identity-access/identity-access.module.js';
 import { UsersModule } from './modules/users/users.module.js';
+import { PostSaleRequestsModule } from './modules/post-sale-requests/post-sale-requests.module.js';
+import { PrivacyModule } from './modules/privacy/privacy.module.js';
+import { TechnicalReportsModule } from './modules/technical-reports/technical-reports.module.js';
 
 @Module({
   imports: [
@@ -20,6 +23,9 @@ import { UsersModule } from './modules/users/users.module.js';
     IdentityAccessModule,
     AuthModule,
     UsersModule,
+    PostSaleRequestsModule,
+    PrivacyModule,
+    TechnicalReportsModule,
     HealthModule,
   ],
 })

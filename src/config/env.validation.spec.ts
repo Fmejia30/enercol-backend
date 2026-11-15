@@ -144,4 +144,87 @@ describe('validateEnv', () => {
       validateEnv({ ...validConfig, COGNITO_CLIENT_SECRET: '' }),
     ).toThrow(/COGNITO_CLIENT_SECRET/);
   });
+
+  it('accepts a privacy vault only when the uri and key are both valid', () => {
+    expect(
+      validateEnv({
+        ...validConfig,
+        MONGODB_URI: 'mongodb://localhost:27017',
+        PRIVACY_ENCRYPTION_KEY: validConfig.SESSION_ENCRYPTION_KEY,
+      }),
+    ).toMatchObject({
+      MONGODB_URI: 'mongodb://localhost:27017',
+      MONGODB_DB_NAME: 'enercol_privacy',
+      PRIVACY_ENCRYPTION_KEY: validConfig.SESSION_ENCRYPTION_KEY,
+    });
+  });
+
+  it('rejects a privacy vault that is only half configured', () => {
+    expect(() =>
+      validateEnv({
+        ...validConfig,
+        MONGODB_URI: 'mongodb://localhost:27017',
+      }),
+    ).toThrow(/MONGODB_URI and PRIVACY_ENCRYPTION_KEY/);
+    expect(() =>
+      validateEnv({
+        ...validConfig,
+        PRIVACY_ENCRYPTION_KEY: validConfig.SESSION_ENCRYPTION_KEY,
+      }),
+    ).toThrow(/MONGODB_URI and PRIVACY_ENCRYPTION_KEY/);
+  });
+
+  it('rejects an invalid privacy key without echoing it', () => {
+    expect(() =>
+      validateEnv({
+        ...validConfig,
+        MONGODB_URI: 'mongodb://localhost:27017',
+        PRIVACY_ENCRYPTION_KEY: 'c2hvcnQ=',
+      }),
+    ).toThrow(/PRIVACY_ENCRYPTION_KEY/);
+    try {
+      validateEnv({
+        ...validConfig,
+        MONGODB_URI: 'mongodb://localhost:27017',
+        PRIVACY_ENCRYPTION_KEY: 'c2hvcnQ=',
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain('c2hvcnQ');
+    }
+  });
+
+  it('accepts OpenAI settings and rejects an invalid effort without echoing the key', () => {
+    expect(
+      validateEnv({
+        ...validConfig,
+        OPENAI_API_KEY: 'sk-test-key',
+        OPENAI_MODEL: 'gpt-6-luna',
+        OPENAI_REASONING_EFFORT: 'low',
+        OPENAI_MAX_OUTPUT_TOKENS: '6000',
+      }),
+    ).toMatchObject({
+      OPENAI_API_KEY: 'sk-test-key',
+      OPENAI_MODEL: 'gpt-6-luna',
+      OPENAI_REASONING_EFFORT: 'low',
+      OPENAI_MAX_OUTPUT_TOKENS: 6000,
+    });
+
+    const secret = 'sk-secret-value';
+    expect(() =>
+      validateEnv({
+        ...validConfig,
+        OPENAI_API_KEY: secret,
+        OPENAI_REASONING_EFFORT: 'ultra',
+      }),
+    ).toThrow(/OPENAI_REASONING_EFFORT/);
+    try {
+      validateEnv({
+        ...validConfig,
+        OPENAI_API_KEY: secret,
+        OPENAI_REASONING_EFFORT: 'ultra',
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain(secret);
+    }
+  });
 });
