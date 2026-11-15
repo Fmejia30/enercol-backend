@@ -8,6 +8,7 @@ import type { AuthenticatedUser } from '../domain/authenticated-user.js';
 
 export interface AuthenticatedRequest extends Request {
   user?: AuthenticatedUser;
+  authenticatedBySession?: boolean;
 }
 
 export const AUTHENTICATION_REQUIRED_MESSAGE = 'Se requiere autenticación';

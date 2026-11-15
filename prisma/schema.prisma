@@ -89,3 +89,247 @@ model AuditLog {
   @@index([targetSub, createdAt])
   @@map("audit_log")
 }
+
+enum PostSaleRequestStatus {
+  ABIERTA
+  EN_ANALISIS
+  INFORME_EMITIDO
+  RECEIVED
+  ASSIGNED
+  IN_ANALYSIS
+  REPORT_DRAFT
+  PENDING_VALIDATION
+  REPORT_APPROVED
+  REPORT_CHANGES_REQUESTED
+  REANALYSIS_REQUIRED
+
+  @@map("post_sale_request_status")
+}
+
+enum PostSaleRequestActivityEvent {
+  REQUEST_REGISTERED
+  SPECIALIST_ASSIGNED
+  ANALYSIS_COMPLETED
+  ANALYSIS_FAILED
+  REPORT_GENERATED
+  REPORT_SUBMITTED
+  REVIEW_STARTED
+  REPORT_APPROVED
+  CHANGES_REQUESTED
+  REPORT_REVISED
+  REANALYSIS_REQUIRED
+
+  @@map("post_sale_request_activity_event")
+}
+
+enum PostSaleRequestType {
+  VERIFICACION_DEMANDA
+  DESVIACION_FACTOR_POTENCIA
+  CONSUMO_ATIPICO
+  CALIDAD_DE_POTENCIA
+
+  @@map("post_sale_request_type")
+}
+
+model PostSaleRequest {
+  id                    String                @id @default(uuid())
+  ticketCode            String                @unique @map("ticket_code")
+  customerId            String                @map("customer_id")
+  customerName          String                @map("customer_name")
+  facilityName          String                @map("facility_name")
+  assetId               String?               @map("asset_id")
+  assignedSpecialistSub String?               @map("assigned_specialist_sub")
+  type                  PostSaleRequestType
+  description           String
+  periodStart           DateTime              @map("period_start") @db.Date
+  periodEnd             DateTime              @map("period_end") @db.Date
+  status                PostSaleRequestStatus
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+
+  technicalDataset   TechnicalDataset?
+  technicalAnalyses  TechnicalAnalysis[]
+  technicalReports   TechnicalReport[]
+  activities         PostSaleRequestActivity[]
+
+  @@index([assignedSpecialistSub, createdAt])
+  @@index([status, createdAt])
+  @@map("post_sale_request")
+}
+
+model TechnicalDataset {
+  id                    String                   @id
+  postSaleRequestId     String                   @unique @map("post_sale_request_id")
+  request               PostSaleRequest          @relation(fields: [postSaleRequestId], references: [id], onDelete: Cascade)
+  demandThreshold       Decimal?                 @map("demand_threshold") @db.Decimal(12, 3)
+  demandUnit            String                   @map("demand_unit")
+  evaluationConsumption Decimal?                 @map("evaluation_consumption") @db.Decimal(14, 3)
+  consumptionUnit       String                   @map("consumption_unit")
+  sourceName            String                   @map("source_name")
+  sourceKind            String                   @map("source_kind")
+  telemetryReadings     TelemetryReading[]
+  historicalConsumption HistoricalConsumption[]
+
+  @@map("technical_dataset")
+}
+
+model TelemetryReading {
+  id             String           @id
+  datasetId      String           @map("dataset_id")
+  dataset        TechnicalDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  measuredAt     DateTime         @map("measured_at") @db.Timestamp(3)
+  measuredDemand Decimal          @map("measured_demand") @db.Decimal(12, 3)
+
+  @@unique([datasetId, measuredAt])
+  @@index([datasetId, measuredAt])
+  @@map("telemetry_reading")
+}
+
+model HistoricalConsumption {
+  id          String           @id
+  datasetId   String           @map("dataset_id")
+  dataset     TechnicalDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  periodStart DateTime         @map("period_start") @db.Date
+  periodEnd   DateTime         @map("period_end") @db.Date
+  consumption Decimal          @map("consumption") @db.Decimal(14, 3)
+
+  @@unique([datasetId, periodStart])
+  @@index([datasetId, periodStart])
+  @@map("historical_consumption")
+}
+
+enum TechnicalAnalysisStatus {
+  SUCCEEDED
+  FAILED
+
+  @@map("technical_analysis_status")
+}
+
+model TechnicalAnalysis {
+  id                String                   @id
+  postSaleRequestId String                   @map("post_sale_request_id")
+  request           PostSaleRequest          @relation(fields: [postSaleRequestId], references: [id], onDelete: Cascade)
+  status            TechnicalAnalysisStatus
+  executedAt        DateTime                 @map("executed_at") @db.Timestamp(3)
+  executedBySub     String                   @map("executed_by_sub")
+  failureMessage    String?                  @map("failure_message")
+  inputSnapshot     Json                     @map("input_snapshot")
+  findings          Json
+  technicalReports  TechnicalReport[]
+  activities        PostSaleRequestActivity[]
+
+  @@unique([id, postSaleRequestId])
+  @@index([postSaleRequestId, executedAt])
+  @@map("technical_analysis")
+}
+
+enum TechnicalReportStatus {
+  DRAFT
+  PENDING_VALIDATION
+  UNDER_REVIEW
+  CHANGES_REQUESTED
+  REANALYSIS_REQUIRED
+  APPROVED
+
+  @@map("technical_report_status")
+}
+
+enum TechnicalReportReviewEvent {
+  SUBMITTED
+  REVIEW_STARTED
+  APPROVED
+  CHANGES_REQUESTED
+  REANALYSIS_REQUIRED
+
+  @@map("technical_report_review_event")
+}
+
+enum TechnicalReportReviewSlot {
+  SUBMITTED
+  STARTED
+  DECISION
+
+  @@map("technical_report_review_slot")
+}
+
+enum TechnicalReportOrigin {
+  AI
+  MANUAL
+
+  @@map("technical_report_origin")
+}
+
+model TechnicalReport {
+  id                String                 @id
+  postSaleRequestId String                 @map("post_sale_request_id")
+  analysisId        String                 @map("analysis_id")
+  request           PostSaleRequest        @relation(fields: [postSaleRequestId], references: [id], onDelete: Cascade)
+  analysis          TechnicalAnalysis      @relation(fields: [analysisId, postSaleRequestId], references: [id, postSaleRequestId], onDelete: Cascade)
+  version           Int
+  status            TechnicalReportStatus
+  origin            TechnicalReportOrigin  @default(AI)
+  schemaVersion     Int                    @map("schema_version")
+  content           Json
+  model             String
+  reasoningEffort   String                 @map("reasoning_effort")
+  inputTokens       Int?                   @map("input_tokens")
+  outputTokens      Int?                   @map("output_tokens")
+  createdBySub      String                 @map("created_by_sub")
+  createdAt         DateTime               @map("created_at") @db.Timestamp(3)
+  updatedAt         DateTime               @map("updated_at") @db.Timestamp(3)
+  reviews           TechnicalReportReview[]
+  activities        PostSaleRequestActivity[]
+
+  @@unique([postSaleRequestId, version])
+  @@index([postSaleRequestId, createdAt])
+  @@index([status, updatedAt])
+  @@map("technical_report")
+}
+
+model TechnicalReportReview {
+  id                String                     @id
+  reportId          String                     @map("report_id")
+  report            TechnicalReport            @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  postSaleRequestId String                     @map("post_sale_request_id")
+  submittedVersion  Int                        @map("submitted_version")
+  eventType         TechnicalReportReviewEvent @map("event_type")
+  slot              TechnicalReportReviewSlot
+  actorSub          String                     @map("actor_sub")
+  comments          String?
+  analysisId        String?                    @map("analysis_id")
+  createdAt         DateTime                   @map("created_at") @db.Timestamp(3)
+
+  @@unique([reportId, slot])
+  @@index([postSaleRequestId, createdAt])
+  @@map("technical_report_review")
+}
+
+model PostSaleRequestActivity {
+  id                  String                        @id
+  postSaleRequestId   String                        @map("post_sale_request_id")
+  request             PostSaleRequest               @relation(fields: [postSaleRequestId], references: [id], onDelete: Cascade)
+  eventType           PostSaleRequestActivityEvent  @map("event_type")
+  previousStatus      PostSaleRequestStatus?        @map("previous_status")
+  newStatus           PostSaleRequestStatus?        @map("new_status")
+  description         String
+  actorSub            String?                       @map("actor_sub")
+  actorRole           String?                       @map("actor_role")
+  technicalAnalysisId String?                       @map("technical_analysis_id")
+  analysis            TechnicalAnalysis?            @relation(fields: [technicalAnalysisId], references: [id], onDelete: SetNull)
+  technicalReportId   String?                       @map("technical_report_id")
+  report              TechnicalReport?              @relation(fields: [technicalReportId], references: [id], onDelete: SetNull)
+  reportVersion       Int?                          @map("report_version")
+  metadata            Json?
+  dedupeKey           String                        @unique @map("dedupe_key")
+  createdAt           DateTime                      @map("created_at") @db.Timestamp(3)
+
+  @@index([postSaleRequestId, createdAt])
+  @@map("post_sale_request_activity")
+}
+
+model PostSaleRequestTicket {
+  id        String @id
+  lastValue Int    @default(0) @map("last_value")
+
+  @@map("post_sale_request_ticket")
+}

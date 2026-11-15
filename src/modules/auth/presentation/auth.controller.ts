@@ -27,6 +27,7 @@ import {
   AuthUnavailableError,
   BffAuthService,
   ChallengeExpiredError,
+  CSRF_REJECTED_MESSAGE,
   CsrfRejectedError,
   InvalidChallengeRequestError,
   InvalidPasswordError,
@@ -50,7 +51,6 @@ import {
 const LOGIN_FAILED_MESSAGE = 'No fue posible iniciar sesión';
 const ORIGIN_REJECTED_MESSAGE =
   'No fue posible validar el origen de la solicitud';
-const CSRF_REJECTED_MESSAGE = 'No fue posible validar la solicitud';
 const RATE_LIMIT_MESSAGE = 'Demasiados intentos. Inténtelo más tarde.';
 const UNAVAILABLE_MESSAGE =
   'No fue posible completar la autenticación. Inténtelo más tarde.';

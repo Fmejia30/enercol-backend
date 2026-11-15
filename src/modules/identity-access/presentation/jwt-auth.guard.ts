@@ -46,6 +46,7 @@ export class JwtAuthGuard implements CanActivate {
         const user = await authenticator.authenticateFromRequest(request);
         if (user) {
           request.user = user;
+          request.authenticatedBySession = true;
           return true;
         }
       } catch (error) {

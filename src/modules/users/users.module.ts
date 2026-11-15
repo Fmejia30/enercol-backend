@@ -59,6 +59,6 @@ import { UsersController } from './presentation/users.controller.js';
       useClass: CognitoUserAdminClient,
     },
   ],
-  exports: [COGNITO_USER_ADMIN],
+  exports: [COGNITO_USER_ADMIN, USER_DIRECTORY_REPOSITORY],
 })
 export class UsersModule {}

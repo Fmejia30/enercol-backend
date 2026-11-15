@@ -58,6 +58,8 @@ export class CsrfRejectedError extends Error {
   }
 }
 
+export const CSRF_REJECTED_MESSAGE = 'No fue posible validar la solicitud';
+
 export class RateLimitedError extends Error {
   constructor() {
     super('Rate limited');
@@ -219,10 +221,7 @@ export class BffAuthService {
         if (!session) {
           return { kind: 'missing' as const };
         }
-        if (
-          !input.csrfToken ||
-          !safeEqual(sha256Hex(input.csrfToken), session.csrfTokenHash)
-        ) {
+        if (!this.csrfMatches(session, input.csrfToken)) {
           throw new CsrfRejectedError();
         }
         if (!session.revokedAt) {
@@ -251,6 +250,27 @@ export class BffAuthService {
 
     if (outcome.kind === 'revoked') {
       this.audit('LOGOUT', 'success', input.client, outcome.userId);
+    }
+  }
+
+  async assertCsrf(
+    sessionId: string,
+    csrfToken: string | undefined,
+  ): Promise<void> {
+    const accepted = await this.repository.withSessionLock(
+      sha256Hex(sessionId),
+      async (session) => {
+        if (!session || session.revokedAt) {
+          return false;
+        }
+        if (session.expiresAt.getTime() <= this.clock().getTime()) {
+          return false;
+        }
+        return this.csrfMatches(session, csrfToken);
+      },
+    );
+    if (!accepted) {
+      throw new CsrfRejectedError();
     }
   }
 
@@ -864,6 +884,16 @@ export class BffAuthService {
     }
     recent.push(now);
     this.attempts.set(key, recent);
+  }
+
+  private csrfMatches(
+    session: StoredAuthSession,
+    csrfToken: string | undefined,
+  ): boolean {
+    if (!csrfToken) {
+      return false;
+    }
+    return safeEqual(sha256Hex(csrfToken), session.csrfTokenHash);
   }
 
   private readSecret(payload: string): string | undefined {
