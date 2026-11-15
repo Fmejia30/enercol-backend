@@ -2,7 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 import { historyBeforePeriod } from '../domain/technical-dataset.js';
 import {
   applyTechnicalTestCases,
-  assertSeedTarget,
+  readSeedDatabaseUrl,
   readSeedSpecialistSub,
   technicalTestCases,
   type TechnicalSeedHistory,
@@ -32,45 +32,32 @@ describe('technical case seed', () => {
     );
   });
 
-  it('allows the local database and the configured demonstration host, including production mode', () => {
-    expect(() =>
-      assertSeedTarget({
+  it('uses DATABASE_URL for a remote PostgreSQL host without a host allowlist', () => {
+    const neon =
+      'postgresql://user:secret@ep-example.us-east-2.aws.neon.tech/enercol?sslmode=require';
+    expect(
+      readSeedDatabaseUrl({
         NODE_ENV: 'production',
-        DATABASE_URL: 'postgresql://postgres:secret@localhost:5432/enercol',
+        DATABASE_URL: neon,
       }),
-    ).not.toThrow();
-    expect(() =>
-      assertSeedTarget({
-        NODE_ENV: 'production',
-        DATABASE_URL: 'postgresql://postgres:secret@demo.internal:5432/enercol',
-        SEED_DATABASE_HOST: 'demo.internal',
+    ).toBe(neon);
+    expect(
+      readSeedDatabaseUrl({
+        DATABASE_URL: 'postgresql://postgres:secret@db.example:5432/enercol',
       }),
-    ).not.toThrow();
-    expect(() =>
-      assertSeedTarget({
-        NODE_ENV: 'development',
-        DATABASE_URL: 'postgresql://postgres:secret@127.0.0.1:5432/enercol',
-      }),
-    ).not.toThrow();
+    ).toBe('postgresql://postgres:secret@db.example:5432/enercol');
   });
 
-  it('refuses an unrelated database without revealing the connection string', () => {
-    expect(() =>
-      assertSeedTarget({
-        NODE_ENV: 'production',
-        DATABASE_URL: 'postgresql://postgres:secret@db.example:5432/enercol',
-        SEED_DATABASE_HOST: 'demo.internal',
-      }),
-    ).toThrow(/SEED_DATABASE_HOST/);
+  it('requires DATABASE_URL and does not require a separate host variable', () => {
+    expect(() => readSeedDatabaseUrl({})).toThrow(/DATABASE_URL/);
+    expect(() => readSeedDatabaseUrl({ DATABASE_URL: '   ' })).toThrow(
+      /DATABASE_URL/,
+    );
     try {
-      assertSeedTarget({
-        NODE_ENV: 'development',
-        DATABASE_URL: 'postgresql://postgres:secret@db.example:5432/enercol',
-      });
+      readSeedDatabaseUrl({});
     } catch (error) {
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).not.toContain('secret');
-      expect((error as Error).message).not.toContain('db.example');
+      expect((error as Error).message).not.toContain('postgresql');
     }
   });
 

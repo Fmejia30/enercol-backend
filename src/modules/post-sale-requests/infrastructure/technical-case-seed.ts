@@ -91,32 +91,16 @@ export function readSeedSpecialistSub(
   return value;
 }
 
-const LOCAL_DATABASE_HOSTS = new Set(['localhost', '127.0.0.1']);
-
-export function assertSeedTarget(
+export function readSeedDatabaseUrl(
   env: Record<string, string | undefined>,
-): void {
-  const databaseUrl = env.DATABASE_URL;
-  if (!databaseUrl) {
+): string {
+  const databaseUrl = env.DATABASE_URL?.trim() ?? '';
+  if (databaseUrl.length === 0) {
     throw new Error(
       'DATABASE_URL es necesaria para sembrar los casos técnicos.',
     );
   }
-  let hostname: string;
-  try {
-    hostname = new URL(databaseUrl).hostname.toLowerCase();
-  } catch {
-    throw new Error('DATABASE_URL no es una cadena de conexión válida.');
-  }
-  if (LOCAL_DATABASE_HOSTS.has(hostname)) {
-    return;
-  }
-  const allowedHost = env.SEED_DATABASE_HOST?.trim().toLowerCase() ?? '';
-  if (allowedHost.length === 0 || allowedHost !== hostname) {
-    throw new Error(
-      'La semilla técnica solo puede ejecutarse contra PostgreSQL local o el host indicado en SEED_DATABASE_HOST.',
-    );
-  }
+  return databaseUrl;
 }
 
 export function technicalTestCases(specialistSub: string): TechnicalSeedCase[] {

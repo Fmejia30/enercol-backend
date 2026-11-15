@@ -219,7 +219,6 @@ Definidas en `.env.example`. No hay secretos reales en el repositorio.
 | `FRONTEND_URL` | URL del frontend |
 | `FRONTEND_ORIGIN` | Origen exacto permitido fuera de desarrollo |
 | `SEED_SPECIALIST_SUB` | Sub de Cognito del especialista al que se asignan los dos casos de demostración. Lo usa la semilla, no el arranque de NestJS |
-| `SEED_DATABASE_HOST` | Hostname permitido para sembrar cuando la base no es local. Vacío en local |
 | `MONGODB_URI` | Conexión de la bóveda de tokens. Vacía hasta usar privacidad. Si se define, `PRIVACY_ENCRYPTION_KEY` también |
 | `MONGODB_DB_NAME` | Base de esa bóveda. Por defecto `enercol_privacy` |
 | `PRIVACY_ENCRYPTION_KEY` | Clave de 32 bytes en Base64 para AES-256-GCM de los valores originales. No es la clave de sesión. En local: `openssl rand -base64 32` |
@@ -236,7 +235,7 @@ Definidas en `.env.example`. No hay secretos reales en el repositorio.
 | `pnpm start:debug` | Arranque con inspector y recarga |
 | `pnpm build` | Genera el cliente Prisma y compila a `dist/` |
 | `pnpm start:prod` | Ejecuta `node dist/main`. No migra ni siembra |
-| `pnpm prisma:migrate` | `prisma migrate dev` para desarrollo local |
+| `pnpm prisma:migrate` | Aplica las migraciones pendientes con `prisma migrate deploy` contra `DATABASE_URL` |
 | `pnpm prisma:seed` | Genera el cliente Prisma y siembra o refresca los dos casos técnicos |
 | `pnpm deploy` | Instala, migra, siembra, compila y arranca. Se detiene si un paso falla |
 | `pnpm test` | Pruebas unitarias |
@@ -247,7 +246,7 @@ Definidas en `.env.example`. No hay secretos reales en el repositorio.
 
 Jest se ejecuta con `node --experimental-vm-modules` porque NestJS 12 y el cliente de Prisma son ESM. Los scripts ya incluyen el flag. El proceso de la API no lo necesita.
 
-Las pruebas unitarias y e2e no llaman a Cognito ni exigen una base en ejecución: el acceso a datos se sustituye. `pnpm prisma:migrate` sí necesita PostgreSQL local.
+Las pruebas unitarias y e2e no llaman a Cognito ni exigen una base en ejecución: el acceso a datos se sustituye. `pnpm prisma:migrate` y `pnpm prisma:seed` usan el PostgreSQL indicado en `DATABASE_URL`.
 
 ## Despliegue
 
@@ -265,7 +264,7 @@ pnpm start:prod
 
 La semilla sigue disponible por separado con `pnpm prisma:seed`. Repetirla actualiza los dos casos y vuelve a escribir la telemetría, el consumo del periodo de evaluación y el consumo histórico.
 
-`SEED_SPECIALIST_SUB` debe ser el sub de Cognito configurado por quien opera el repositorio. Si falta o no tiene formato de sub, la semilla termina con error. En local, `DATABASE_URL` debe apuntar a `localhost` o `127.0.0.1`. Para la base de demostración en otro host, incluido un despliegue con `NODE_ENV=production`, `SEED_DATABASE_HOST` debe ser exactamente ese hostname. Cualquier otro host se rechaza, sin imprimir la cadena de conexión.
+`SEED_SPECIALIST_SUB` debe ser el sub de Cognito configurado por quien opera el repositorio. Si falta o no tiene formato de sub, la semilla termina con error. Las migraciones y la semilla usan el mismo `DATABASE_URL`, incluido un host remoto como Neon.
 
 ## Solicitudes postventa
 
@@ -273,7 +272,7 @@ PostgreSQL es la fuente de las solicitudes. El modelo `PostSaleRequest` se guard
 
 `post_sale_request_ticket` solo guarda el consecutivo del ticket. El primer valor persistido produce `PV-000001`. El incremento ocurre en la base, así que dos registros simultáneos no reciben el mismo código.
 
-La migración `prisma/migrations/20261114213000_optional_post_sale_assignment` hace opcional la asignación y crea ese consecutivo. En desarrollo local se aplica con `pnpm prisma:migrate`. El despliegue usa `prisma migrate deploy` y no corre al arrancar la API.
+La migración `prisma/migrations/20261114213000_optional_post_sale_assignment` hace opcional la asignación y crea ese consecutivo. `pnpm prisma:migrate` ejecuta `prisma migrate deploy` contra `DATABASE_URL` y no corre al arrancar la API.
 
 `POST /api/v1/post-sale-requests` lo pueden llamar `SPECIALIST` y `ADMINISTRATOR`. El cuerpo acepta cliente, instalación, activo opcional, tipo, descripción y periodo. El servidor genera el id, el ticket, el estado `ABIERTA` y las fechas. La solicitud queda sin especialista asignado. Un `VALIDATOR` recibe 403. Campos como `status`, `ticketCode` o `assignedSpecialistSub` se rechazan.
 

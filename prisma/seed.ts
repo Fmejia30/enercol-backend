@@ -3,7 +3,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client.js';
 import {
   applyTechnicalTestCases,
-  assertSeedTarget,
+  readSeedDatabaseUrl,
   readSeedSpecialistSub,
   type TechnicalSeedStore,
 } from '../src/modules/post-sale-requests/infrastructure/technical-case-seed.js';
@@ -11,14 +11,8 @@ import {
 const env = process.env;
 
 try {
-  assertSeedTarget(env);
+  const databaseUrl = readSeedDatabaseUrl(env);
   const specialistSub = readSeedSpecialistSub(env);
-  const databaseUrl = env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error(
-      'DATABASE_URL es necesaria para sembrar los casos técnicos.',
-    );
-  }
   const prisma = new PrismaClient({
     adapter: new PrismaPg({ connectionString: databaseUrl }),
   });
